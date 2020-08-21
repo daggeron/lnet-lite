@@ -1,4 +1,4 @@
-package main
+package lnet
 
 import (
 	"bufio"
@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"os"
 )
@@ -17,19 +18,12 @@ const (
 
 type Pong struct{}
 
-type lnetRequest struct {
-	XMLName      xml.Name `xml:"request"`
-	From         string   `xml:"from,attr,omitempty"`
-	Type         string   `xml:"type,attr"`
-	To           string   `xml:"to,attr,omitempty"`
+type LNETRequest struct {
+	XMLName xml.Name `xml:"request"`
+	From    string   `xml:"from,attr,omitempty"`
+	Type    string   `xml:"type,attr"`
+	To      string   `xml:"to,attr,omitempty"`
 }
-
-type queryRequest struct {
-	XMLName      xml.Name `xml:"request"`
-	From         string   `xml:"from,attr"`
-	Type         string   `xml:"type,attr"`
-}
-
 
 type XMLElement struct {
 	XMLName  xml.Name
@@ -37,11 +31,11 @@ type XMLElement struct {
 }
 
 type pingRequest struct {
-	XMLName      xml.Name  `xml:"ping"`
+	XMLName xml.Name `xml:"ping"`
 }
 
 type pongResponse struct {
-	XMLName      xml.Name  `xml:"pong"`
+	XMLName xml.Name `xml:"pong"`
 }
 
 type Login struct {
@@ -54,13 +48,12 @@ type Login struct {
 }
 
 type Data struct {
-	XMLName  xml.Name `xml:"data"`
-	Type         string   `xml:"type,attr,omitempty"`
-	From         string   `xml:"from,attr,omitempty"`
-	To           string   `xml:"to,attr,omitempty"`
-	Text         string   `xml:",innerxml"`
+	XMLName xml.Name `xml:"data"`
+	Type    string   `xml:"type,attr,omitempty"`
+	From    string   `xml:"from,attr,omitempty"`
+	To      string   `xml:"to,attr,omitempty"`
+	Text    string   `xml:",innerxml"`
 }
-
 
 type Message struct {
 	XMLName      xml.Name `xml:"message"`
@@ -72,22 +65,15 @@ type Message struct {
 	Text         string   `xml:",innerxml"`
 }
 
-type Client struct {
+type Connection struct {
 	conn       net.Conn
-	nickname   string
+	NickName   string
 	readWriter io.ReadWriter
 	decoder    *xml.Decoder
 	encoder    *xml.Encoder
 }
 
-
-
-
-
-
-
-
-func (c *Client) Recv() (stanza interface{}, err error) {
+func (c *Connection) Recv() (stanza interface{}, err error) {
 	for {
 		_, val, err := c.next()
 		if err != nil {
@@ -95,13 +81,13 @@ func (c *Client) Recv() (stanza interface{}, err error) {
 		}
 		switch v := val.(type) {
 		case *Data:
-			v.From = c.nickname
+			v.From = c.NickName
 			return v, nil
-		case *lnetRequest:
-			v.From = c.nickname
+		case *LNETRequest:
+			v.From = c.NickName
 			return v, nil
 		case *Message:
-			v.From = c.nickname
+			v.From = c.NickName
 			return v, nil
 		case *pingRequest:
 			fmt.Println("Ping!")
@@ -109,13 +95,12 @@ func (c *Client) Recv() (stanza interface{}, err error) {
 			return Pong{}, nil
 		case *Login:
 
-			c.nickname = v.Name
+			c.NickName = v.Name
 			var msg = &Message{
-				To: c.nickname,
+				To:   c.NickName,
 				From: "server",
 				Text: "Hello",
 				Type: "server",
-
 			}
 			c.Send(msg)
 			return msg, nil
@@ -144,12 +129,12 @@ func (e *XMLElement) String() string {
 	return buf.String()
 }
 
-func (c *Client) SendKeepAlive() (n int, err error) {
+func (c *Connection) SendKeepAlive() (n int, err error) {
 	return fmt.Fprintf(c.conn, " ")
 }
 
 // Scan XML token stream to find next StartElement.
-func (c *Client) nextStart() (xml.StartElement, error) {
+func (c *Connection) nextStart() (xml.StartElement, error) {
 	for {
 		t, err := c.decoder.Token()
 		if err != nil || t == nil {
@@ -165,7 +150,7 @@ func (c *Client) nextStart() (xml.StartElement, error) {
 // Scan XML token stream for next element and save into val.
 // If val == nil, allocate new element based on proto map.
 // Either way, return val.
-func (c *Client) next() (xml.Name, interface{}, error) {
+func (c *Connection) next() (xml.Name, interface{}, error) {
 	// Read start element to find out what type we want.
 	se, err := c.nextStart()
 	if err != nil {
@@ -182,7 +167,7 @@ func (c *Client) next() (xml.Name, interface{}, error) {
 	case "pong":
 		nv = &pongResponse{}
 	case "request":
-		nv = &lnetRequest{}
+		nv = &LNETRequest{}
 	case "data":
 		nv = &Data{}
 	default:
@@ -198,27 +183,32 @@ func (c *Client) next() (xml.Name, interface{}, error) {
 	return se.Name, nv, err
 }
 
-
-func (c *Client) Send(msg interface{}) error {
+func (c *Connection) Send(msg interface{}) error {
 
 	err := c.encoder.Encode(msg)
 
 	return err
 }
 
-
-func (c *Client) Write(msg string) error {
+func (c *Connection) Write(msg string) error {
 	_, err := fmt.Fprint(c.readWriter, msg)
 
 	return err
 }
 
-func (c *Client) init() {
-	c.readWriter = NewStreamLogger(c.conn, os.Stdout)
-	c.decoder = xml.NewDecoder(bufio.NewReaderSize(c.readWriter, maxPacketSize))
-	c.encoder = xml.NewEncoder(bufio.NewWriterSize(c.readWriter, maxPacketSize))
+func New(conn net.Conn, debug bool) *Connection {
+	var client = &Connection{}
+	if debug {
+		client.readWriter = NewStreamLogger(conn, os.Stdout)
+	} else {
+		client.readWriter = NewStreamLogger(conn, ioutil.Discard)
+	}
+	client.decoder = xml.NewDecoder(bufio.NewReaderSize(client.readWriter, maxPacketSize))
+	client.encoder = xml.NewEncoder(bufio.NewWriterSize(client.readWriter, maxPacketSize))
+
+	return client
 }
 
-func (c *Client) Close() error {
+func (c *Connection) Close() error {
 	return c.conn.Close()
 }
