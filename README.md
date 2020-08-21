@@ -1,4 +1,4 @@
 # lnet-lite
-emergency cobble of various code bits I have to get something as a crutch
+Emergency slap dash for Duskruin
 
 # This is quick and dirty.
