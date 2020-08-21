@@ -1,4 +1,4 @@
 # lnet-lite
 Emergency slap dash for Duskruin
 
-# This is quick and dirty.
+# This is quick and dirty.  Ugly code.
